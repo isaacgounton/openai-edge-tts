@@ -48,6 +48,9 @@ def text_to_speech():
         
         mime_type = AUDIO_FORMAT_MIME_TYPES.get(response_format, "audio/mpeg")
 
+        # Log the request details
+        app.logger.info(f"TTS request - text length: {len(text)}, voice: {voice}, format: {response_format}, speed: {speed}")
+
         # Generate the audio file in the specified format with speed adjustment
         output_file_path = generate_speech(text, voice, response_format, speed)
 

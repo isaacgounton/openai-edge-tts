@@ -49,15 +49,18 @@ async def _generate_audio(text, voice, response_format, speed):
 
     # Generate the MP3 file with improved connection handling
     try:
+        print(f"Generating TTS audio with voice: {edge_tts_voice}, rate: {speed_rate}")
         communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
         await communicator.save(temp_mp3_path)
         temp_mp3_file_obj.close() # Explicitly close our file object for the initial mp3
+        print(f"TTS audio generated successfully, file size: {os.path.getsize(temp_mp3_path)} bytes")
     except Exception as e:
         # Clean up temp file if creation failed
         temp_mp3_file_obj.close()
         Path(temp_mp3_path).unlink(missing_ok=True)
-        print(f"Error generating TTS audio: {e}")
-        raise RuntimeError(f"TTS generation failed: {e}")
+        error_msg = f"Error generating TTS audio with voice '{edge_tts_voice}': {str(e)} (type: {type(e).__name__})"
+        print(error_msg)
+        raise RuntimeError(error_msg)
 
     # If the requested format is mp3, return the generated file directly
     if response_format == "mp3":
