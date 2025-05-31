@@ -85,6 +85,17 @@ def list_voices():
 def list_all_voices():
     return jsonify({"voices": get_voices('all')})
 
+# Add missing route that some clients might expect
+@app.route('/v1/audio/speech/voices', methods=['GET', 'POST'])
+@require_api_key
+def speech_voices():
+    """Alternative endpoint for voice listing that some clients might expect"""
+    specific_language = None
+    data = request.args if request.method == 'GET' else request.json
+    if data and ('language' in data or 'locale' in data):
+        specific_language = data.get('language') if 'language' in data else data.get('locale')
+    return jsonify({"voices": get_voices(specific_language)})
+
 """
 Support for ElevenLabs and Azure AI Speech
     (currently in beta)

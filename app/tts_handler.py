@@ -47,10 +47,17 @@ async def _generate_audio(text, voice, response_format, speed):
         print(f"Error converting speed: {e}. Defaulting to +0%.")
         speed_rate = "+0%"
 
-    # Generate the MP3 file
-    communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
-    await communicator.save(temp_mp3_path)
-    temp_mp3_file_obj.close() # Explicitly close our file object for the initial mp3
+    # Generate the MP3 file with improved connection handling
+    try:
+        communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
+        await communicator.save(temp_mp3_path)
+        temp_mp3_file_obj.close() # Explicitly close our file object for the initial mp3
+    except Exception as e:
+        # Clean up temp file if creation failed
+        temp_mp3_file_obj.close()
+        Path(temp_mp3_path).unlink(missing_ok=True)
+        print(f"Error generating TTS audio: {e}")
+        raise RuntimeError(f"TTS generation failed: {e}")
 
     # If the requested format is mp3, return the generated file directly
     if response_format == "mp3":
@@ -126,14 +133,30 @@ def get_models():
     ]
 
 async def _get_voices(language=None):
-    # List all voices, filter by language if specified
-    all_voices = await edge_tts.list_voices()
-    language = language or DEFAULT_LANGUAGE  # Use default if no language specified
-    filtered_voices = [
-        {"name": v['ShortName'], "gender": v['Gender'], "language": v['Locale']}
-        for v in all_voices if language == 'all' or language is None or v['Locale'] == language
-    ]
-    return filtered_voices
+    """List all voices, filter by language if specified. Handle connection errors gracefully."""
+    try:
+        all_voices = await edge_tts.list_voices()
+        language = language or DEFAULT_LANGUAGE  # Use default if no language specified
+        filtered_voices = [
+            {"name": v['ShortName'], "gender": v['Gender'], "language": v['Locale']}
+            for v in all_voices if language == 'all' or language is None or v['Locale'] == language
+        ]
+        return filtered_voices
+    except Exception as e:
+        print(f"Error listing voices: {e}")
+        # Return a fallback list of basic voices if edge-tts fails
+        fallback_voices = [
+            {"name": "en-US-AvaNeural", "gender": "Female", "language": "en-US"},
+            {"name": "en-US-AndrewNeural", "gender": "Male", "language": "en-US"},
+            {"name": "en-GB-SoniaNeural", "gender": "Female", "language": "en-GB"},
+            {"name": "en-US-EricNeural", "gender": "Male", "language": "en-US"},
+            {"name": "en-US-SteffanNeural", "gender": "Male", "language": "en-US"},
+            {"name": "en-US-EmmaNeural", "gender": "Female", "language": "en-US"}
+        ]
+        if language == 'all' or language is None:
+            return fallback_voices
+        else:
+            return [v for v in fallback_voices if v['language'] == language]
 
 def get_voices(language=None):
     return asyncio.run(_get_voices(language))
