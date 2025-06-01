@@ -50,6 +50,7 @@ async def _generate_audio(text, voice, response_format, speed):
     # Generate the MP3 file with improved connection handling
     try:
         print(f"Generating TTS audio with voice: {edge_tts_voice}, rate: {speed_rate}")
+        # Create communicator with explicit connection handling
         communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
         await communicator.save(temp_mp3_path)
         temp_mp3_file_obj.close() # Explicitly close our file object for the initial mp3
