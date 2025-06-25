@@ -3,7 +3,6 @@
 DEFAULT_CONFIGS = {
     # Server settings
     "PORT": 5050,
-    "API_KEY": 'your_api_key_here',  # Fallback API key
 
     # TTS settings
     "DEFAULT_VOICE": 'en-US-AvaNeural',
@@ -16,4 +15,4 @@ DEFAULT_CONFIGS = {
     "REMOVE_FILTER": False,
     "EXPAND_API": True,
     "DETAILED_ERROR_LOGGING": True,
-} 
+}

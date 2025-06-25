@@ -15,7 +15,11 @@ def getenv_bool(name: str, default: bool = False) -> bool:
     # For typical usage, the config default (passed at call site) is preferred.
     return os.getenv(name, str(default)).lower() in ("yes", "y", "true", "1", "t")
 
-API_KEY = os.getenv('API_KEY', DEFAULT_CONFIGS["API_KEY"])
+# Get API key from environment
+API_KEY = os.getenv('API_KEY')
+if not API_KEY:
+    raise ValueError("API_KEY environment variable must be set")
+
 REQUIRE_API_KEY = getenv_bool('REQUIRE_API_KEY', DEFAULT_CONFIGS["REQUIRE_API_KEY"])
 DETAILED_ERROR_LOGGING = getenv_bool('DETAILED_ERROR_LOGGING', DEFAULT_CONFIGS["DETAILED_ERROR_LOGGING"])
 

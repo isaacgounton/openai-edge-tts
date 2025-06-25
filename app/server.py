@@ -14,7 +14,11 @@ from utils import getenv_bool, require_api_key, AUDIO_FORMAT_MIME_TYPES, DETAILE
 app = Flask(__name__)
 load_dotenv()
 
-API_KEY = os.getenv('API_KEY', DEFAULT_CONFIGS["API_KEY"])
+# Get API key from environment (required)
+API_KEY = os.getenv('API_KEY')
+if not API_KEY:
+    raise ValueError("API_KEY environment variable must be set")
+
 PORT = int(os.getenv('PORT', str(DEFAULT_CONFIGS["PORT"])))
 
 DEFAULT_VOICE = os.getenv('DEFAULT_VOICE', DEFAULT_CONFIGS["DEFAULT_VOICE"])
