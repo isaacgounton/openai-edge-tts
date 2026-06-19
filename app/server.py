@@ -1,7 +1,7 @@
 # server.py
 
 from flask import Flask, request, send_file, jsonify, Response
-from gevent.pywsgi import WSGIServer
+from waitress import serve
 from dotenv import load_dotenv
 import os
 import traceback
@@ -10,7 +10,7 @@ import base64
 
 from config import DEFAULT_CONFIGS
 from handle_text import prepare_tts_input_with_context
-from tts_handler import generate_speech, generate_speech_stream, get_models_formatted, get_voices, get_voices_formatted
+from tts_handler import generate_speech, generate_speech_stream, generate_pcm_stream, get_models_formatted, get_voices, get_voices_formatted
 from utils import getenv_bool, require_api_key, AUDIO_FORMAT_MIME_TYPES, DETAILED_ERROR_LOGGING
 
 app = Flask(__name__)
@@ -88,10 +88,35 @@ def text_to_speech():
         
         # Check stream format - only "sse" triggers streaming
         stream_format = data.get('stream_format', 'audio')  # 'audio' (default) or 'sse'
-        
+
         mime_type = AUDIO_FORMAT_MIME_TYPES.get(response_format, "audio/mpeg")
+
+        # Log the request shape (borrowed from dev_june) — useful for latency
+        # and error triage without logging the full text.
+        app.logger.info(
+            f"TTS request - text length: {len(text)}, voice: {voice}, "
+            f"format: {response_format}, stream: {stream_format}, speed: {speed}"
+        )
         
-        if stream_format == 'sse':
+        if response_format == 'pcm':
+            # Low-latency real-time path: stream raw s16le mono PCM as edge-tts
+            # produces it (no save-to-file, no full-clip buffering). Default
+            # 24 kHz; callers can override via "sample_rate". Used by Perbene's
+            # voice pipeline, which resamples to the 8 kHz telephony wire.
+            try:
+                sample_rate = int(data.get('sample_rate', 24000))
+            except (TypeError, ValueError):
+                sample_rate = 24000
+            return Response(
+                generate_pcm_stream(text, voice, speed, sample_rate),
+                mimetype='audio/L16',
+                headers={
+                    'Content-Type': 'audio/L16',
+                    'Cache-Control': 'no-cache',
+                    'X-Accel-Buffering': 'no',  # disable any proxy buffering
+                },
+            )
+        elif stream_format == 'sse':
             # Return SSE streaming response with JSON events
             def generate_sse():
                 for event in generate_sse_audio_stream(text, voice, speed):
@@ -137,6 +162,13 @@ def text_to_speech():
             app.logger.error(f"Error in text_to_speech: {str(e)}")
         # Return a 500 error for unhandled exceptions, which is more standard than 400
         return jsonify({"error": "An internal server error occurred", "details": str(e)}), 500
+
+# Liveness/readiness probe (no auth) — used by the Docker HEALTHCHECK and by
+# compose depends_on so dependents only start once TTS is serving.
+@app.route('/health', methods=['GET'])
+@app.route('/healthz', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"})
 
 # OpenAI endpoint format
 @app.route('/v1/models', methods=['GET', 'POST'])
@@ -258,5 +290,8 @@ print(f" * TTS Endpoint: http://localhost:{PORT}/v1/audio/speech")
 print(f" ")
 
 if __name__ == '__main__':
-    http_server = WSGIServer(('0.0.0.0', PORT), app)
-    http_server.serve_forever()
+    # Threaded WSGI server: each request runs in its own thread so the blocking
+    # pipe reads in the streaming PCM path never stall concurrent calls. waitress
+    # flushes generator chunks as they are yielded (true streaming), which is
+    # what the low-latency PCM path relies on.
+    serve(app, host='0.0.0.0', port=PORT, threads=int(os.getenv('THREADS', '16')))

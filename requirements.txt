@@ -1,5 +1,5 @@
 flask
-gevent
+waitress
 python-dotenv
 edge-tts
 emoji
