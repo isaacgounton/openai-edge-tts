@@ -64,8 +64,31 @@ async def _generate_audio_stream(text, voice, speed):
             yield chunk["data"]
 
 def generate_speech_stream(text, voice, speed=1.0):
-    """Generate streaming speech audio (synchronous wrapper)."""
-    return asyncio.run(_generate_audio_stream(text, voice, speed))
+    """Generate streaming speech audio (synchronous generator wrapper).
+
+    `_generate_audio_stream` is an async *generator*, so `asyncio.run()` on it
+    raised "a coroutine was expected, got <async_generator>" and broke the SSE
+    path (issue #34). Drive it from a dedicated event loop and yield chunks
+    synchronously instead.
+    """
+    async_generator = _generate_audio_stream(text, voice, speed)
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        while True:
+            try:
+                next_chunk = loop.run_until_complete(async_generator.__anext__())
+            except StopAsyncIteration:
+                break
+            yield next_chunk
+    finally:
+        # Best-effort cleanup of async generators and loop
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 def generate_pcm_stream(text, voice, speed=1.0, sample_rate=24000):
@@ -188,11 +211,12 @@ async def _generate_audio(text, voice, response_format, speed):
             "mp3": "libmp3lame",
             "wav": "pcm_s16le",
             "opus": "libopus",
-            "flac": "flac"
+            "flac": "flac",
+            "pcm": "pcm_s16le",
         }.get(response_format, "aac"),  # Default to AAC if unknown
     ]
 
-    if response_format != "wav":
+    if response_format not in ("wav", "pcm"):
         ffmpeg_command.extend(["-b:a", "192k"])
 
     ffmpeg_command.extend([
@@ -201,7 +225,8 @@ async def _generate_audio(text, voice, response_format, speed):
             "mp3": "mp3",
             "wav": "wav",
             "opus": "ogg",
-            "flac": "flac"
+            "flac": "flac",
+            "pcm": "s16le",  # raw 16-bit PCM
         }.get(response_format, response_format),  # Default to matching format
         "-y",  # Overwrite without prompt
         converted_path  # Output file path
@@ -236,7 +261,7 @@ def get_models():
     return model_data
 
 def get_models_formatted():
-    return [{ "id": x["id"] } for x in model_data]
+    return [{ "id": x["id"], "object": "model", "owned_by": "openai-edge-tts" } for x in model_data]
 
 def get_voices_formatted():
     return [{ "id": k, "name": v } for k, v in voice_mapping.items()]

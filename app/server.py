@@ -17,6 +17,7 @@ app = Flask(__name__)
 load_dotenv()
 
 API_KEY = os.getenv('API_KEY', DEFAULT_CONFIGS["API_KEY"])
+HOST = os.getenv('HOST', DEFAULT_CONFIGS["HOST"])
 PORT = int(os.getenv('PORT', str(DEFAULT_CONFIGS["PORT"])))
 
 DEFAULT_VOICE = os.getenv('DEFAULT_VOICE', DEFAULT_CONFIGS["DEFAULT_VOICE"])
@@ -176,7 +177,11 @@ def health():
 @app.route('/v1/audio/models', methods=['GET', 'POST'])
 @app.route('/audio/models', methods=['GET', 'POST'])
 def list_models():
-    return jsonify({"models": get_models_formatted()})
+    # OpenAI-compatible list shape: {"object": "list", "data": [...]}
+    return jsonify({
+        "object": "list",
+        "data": get_models_formatted()
+    })
 
 # OpenAI endpoint format
 @app.route('/v1/audio/voices', methods=['GET', 'POST'])
@@ -294,4 +299,4 @@ if __name__ == '__main__':
     # pipe reads in the streaming PCM path never stall concurrent calls. waitress
     # flushes generator chunks as they are yielded (true streaming), which is
     # what the low-latency PCM path relies on.
-    serve(app, host='0.0.0.0', port=PORT, threads=int(os.getenv('THREADS', '16')))
+    serve(app, host=HOST, port=PORT, threads=int(os.getenv('THREADS', '16')))
