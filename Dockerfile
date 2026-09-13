@@ -1,6 +1,9 @@
 FROM python:3.12-slim
 
 WORKDIR /app
+# Unbuffered stdout/stderr: without it the PCM feeder's error prints never reached
+# `docker logs`, hiding why a stream came back empty.
+ENV PYTHONUNBUFFERED=1
 
 # ffmpeg is required: the streaming PCM path pipes edge-tts mp3 -> s16le PCM
 # through ffmpeg, and the wav/opus/aac convert paths use it too. curl powers the

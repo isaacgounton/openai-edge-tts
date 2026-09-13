@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import threading
 import os
+import sys
 from pathlib import Path
 
 from utils import DETAILED_ERROR_LOGGING
@@ -122,16 +123,24 @@ def generate_pcm_stream(text, voice, speed=1.0, sample_rate=24000):
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0,
     )
 
+    fed = {"bytes": 0}
     def _feed() -> None:
         async def _run() -> None:
             communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
             async for chunk in communicator.stream():
                 if chunk["type"] == "audio" and chunk.get("data"):
                     ffmpeg.stdin.write(chunk["data"])
+                    fed["bytes"] += len(chunk["data"])
         try:
             asyncio.run(_run())
+            if not fed["bytes"]:
+                # The PCM response's 200 headers are already sent, so the client
+                # only ever sees an empty body. Say why, here.
+                print(f"edge-tts produced no audio for a {len(text)}-char request "
+                      f"(voice={edge_tts_voice})", file=sys.stderr, flush=True)
         except Exception as e:  # never leave the reader hanging
-            print(f"Error feeding edge-tts -> ffmpeg: {e}")
+            print(f"Error feeding edge-tts -> ffmpeg: {type(e).__name__}: {e}",
+                  file=sys.stderr, flush=True)
         finally:
             try:
                 ffmpeg.stdin.close()
