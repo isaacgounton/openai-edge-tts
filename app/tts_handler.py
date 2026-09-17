@@ -2,6 +2,8 @@
 
 import edge_tts
 import asyncio
+import queue
+import time
 import tempfile
 import subprocess
 import threading
@@ -92,6 +94,67 @@ def generate_speech_stream(text, voice, speed=1.0):
         loop.close()
 
 
+# A synthesis with no audio after this long gets a second, identical request, and the
+# one whose audio starts first is used: Microsoft's first audio for the same sentence
+# ranged from 0.2 s to over 3 s, median 0.6 s (measured from the Perbene server,
+# 2026-09-17), so about a third of requests get a second one.
+HEDGE_AFTER_SECS = float(os.getenv("PCM_HEDGE_AFTER_SECS", "0.8"))
+
+
+class _Synthesis:
+    """One edge-tts request in its own thread; its mp3 chunks are queued as they
+    arrive, then None."""
+
+    def __init__(self, text, voice, rate):
+        self.chunks = queue.Queue()
+        self.started = threading.Event()
+        self.done = threading.Event()
+        self._cancelled = False
+        threading.Thread(target=self._run, args=(text, voice, rate), daemon=True).start()
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _run(self, text, voice, rate):
+        async def run():
+            async for chunk in edge_tts.Communicate(text=text, voice=voice, rate=rate).stream():
+                if self._cancelled:
+                    return  # closes the connection
+                if chunk["type"] == "audio" and chunk.get("data"):
+                    self.chunks.put(chunk["data"])
+                    self.started.set()
+        try:
+            asyncio.run(run())
+        except Exception as e:  # the reader must never hang
+            print(f"Error in edge-tts request: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        finally:
+            self.chunks.put(None)
+            self.done.set()
+
+
+def first_to_start(make, hedge_after=HEDGE_AFTER_SECS, clock=time.monotonic):
+    """Starts `make()`; when it has no audio after `hedge_after` seconds (or ended
+    without any), starts a second one. Returns whichever starts its audio first and
+    cancels the other; the last one when neither produced audio."""
+    racers = [make()]
+    began = clock()
+    while True:
+        for racer in racers:
+            if racer.started.is_set():
+                for other in racers:
+                    if other is not racer:
+                        other.cancel()
+                if len(racers) > 1:
+                    print(f"pcm hedge: request {racers.index(racer) + 1} of 2 won, "
+                          f"{clock() - began:.2f}s", file=sys.stderr, flush=True)
+                return racer
+        if len(racers) == 1 and (clock() - began >= hedge_after or racers[0].done.is_set()):
+            racers.append(make())
+        elif len(racers) > 1 and all(r.done.is_set() for r in racers):
+            return racers[-1]
+        time.sleep(0.01)
+
+
 def generate_pcm_stream(text, voice, speed=1.0, sample_rate=24000):
     """Yield raw little-endian 16-bit mono PCM as edge-tts produces it.
 
@@ -101,10 +164,11 @@ def generate_pcm_stream(text, voice, speed=1.0, sample_rate=24000):
     save-to-file, no full-utterance buffering, no separate convert pass. First
     audio lands in ~300ms instead of after the whole clip is synthesized.
 
-    A background thread runs the edge-tts asyncio stream and feeds ffmpeg's
-    stdin; the calling (request) thread reads ffmpeg's stdout and yields. The
-    threaded WSGI server gives each request its own thread, so the blocking
-    pipe reads here never stall other requests.
+    A background thread picks the edge-tts request whose audio starts first (a slow
+    one gets a second, identical request: first_to_start) and feeds ffmpeg's stdin;
+    the calling (request) thread reads ffmpeg's stdout and yields. The threaded WSGI
+    server gives each request its own thread, so the blocking pipe reads here never
+    stall other requests.
     """
     edge_tts_voice = voice_mapping.get(voice, voice)
     try:
@@ -125,14 +189,11 @@ def generate_pcm_stream(text, voice, speed=1.0, sample_rate=24000):
 
     fed = {"bytes": 0}
     def _feed() -> None:
-        async def _run() -> None:
-            communicator = edge_tts.Communicate(text=text, voice=edge_tts_voice, rate=speed_rate)
-            async for chunk in communicator.stream():
-                if chunk["type"] == "audio" and chunk.get("data"):
-                    ffmpeg.stdin.write(chunk["data"])
-                    fed["bytes"] += len(chunk["data"])
         try:
-            asyncio.run(_run())
+            synthesis = first_to_start(lambda: _Synthesis(text, edge_tts_voice, speed_rate))
+            while (data := synthesis.chunks.get()) is not None:
+                ffmpeg.stdin.write(data)
+                fed["bytes"] += len(data)
             if not fed["bytes"]:
                 # The PCM response's 200 headers are already sent, so the client
                 # only ever sees an empty body. Say why, here.
